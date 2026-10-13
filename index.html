@@ -1079,5 +1079,143 @@ renderTabs();
 goStage(1);
 </script>
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4bc70e2c01a94c73b74392e4234840661791215815920" integrity="sha512-L0ha0OXavK/8okipN9F8BtP84dg9DUhPERbBXzwI6dgTA55d2+yweo3pn5CSFYs45/r8md2+xvUPtTdvTNRfjA==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
+
+<style>
+#whoOverlay{position:fixed;inset:0;z-index:9999;background:linear-gradient(180deg,#FFF7E8,#FDEFE0);
+  display:flex;align-items:center;justify-content:center;padding:20px}
+#whoOverlay.off{display:none}
+.who-card{background:#fff;border:4px solid #FFD894;border-radius:28px;box-shadow:0 18px 50px rgba(201,100,10,.22);
+  max-width:640px;width:100%;padding:26px 26px 30px;text-align:center}
+.who-card h2{margin:0 0 6px;font-size:clamp(24px,5vw,34px);color:#C9640A;letter-spacing:-.02em}
+.who-card p{margin:0 0 18px;color:#7C7369;font-weight:700;font-size:15px}
+.who-nums{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.who-num{cursor:pointer;background:#FFF1DC;border:3px solid #FFD894;border-radius:20px;
+  padding:14px 6px 12px;display:flex;flex-direction:column;align-items:center;gap:2px;transition:transform .08s}
+.who-num:active{transform:scale(.94)}
+.who-num b{font-size:34px;color:#C9640A;line-height:1}
+.who-num span{font-size:13px;font-weight:800;color:#7C7369;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who-status{margin-top:14px;font-size:13px;color:#A79A8B;font-weight:700;min-height:18px}
+#whoChip{position:fixed;top:10px;right:12px;z-index:9998;background:#C9640A;color:#fff;border-radius:999px;
+  padding:8px 12px 8px 16px;font-weight:800;font-size:14px;display:flex;align-items:center;gap:10px;
+  box-shadow:0 8px 20px rgba(201,100,10,.35)}
+#whoChip.off{display:none}
+#whoChip button{border:0;background:rgba(255,255,255,.25);color:#fff;border-radius:999px;padding:5px 10px;
+  font-weight:800;font-size:12px;cursor:pointer;font-family:inherit}
+.who-badge{display:inline-block;background:#EF5B4C;color:#fff;border-radius:999px;font-size:10px;font-weight:800;
+  padding:1px 6px;margin-left:4px}
+</style>
+<div id="whoOverlay"></div>
+<script>
+(function(){
+'use strict';
+function $(s){ return document.querySelector(s); }
+var QS=new URLSearchParams(location.search);
+var ROOM=(QS.get('r')||'moyang31').replace(/[^0-9A-Za-z가-힣]/g,'')||'moyang31';
+var PRE=parseInt(QS.get('s')||'',10);
+var idx=null, cli=null, lastPub=0, tries=0;
+var names=['학생 1','학생 2','학생 3','학생 4','학생 5','학생 6'];
+var KEYS=[1,2,3,4];
+
+function lsKey(i){ return 'moa.st.'+ROOM+'.'+i; }
+function loadSt(i){ try{ return JSON.parse(localStorage.getItem(lsKey(i))||'null'); }catch(e){ return null; } }
+function saveSt(){
+  if(idx==null) return;
+  var cleared=[],started=[];
+  KEYS.forEach(function(s){ if(state.clear[s]) cleared.push(s); else if(state.done[s]>0) started.push(s); });
+  try{ localStorage.setItem(lsKey(idx), JSON.stringify({cleared:cleared,started:started})); }catch(e){}
+}
+function pOf(){ var p={}; KEYS.forEach(function(s){ p[String(s)]={c:state.done[s]||0,t:state.total[s]||0,ok:!!state.clear[s]}; }); return p; }
+function pubState(){ if(!cli||idx==null) return; try{ cli.publish('moyang/'+ROOM+'/s/'+idx, JSON.stringify({s:idx,p:pOf()}),{qos:0}); }catch(e){} }
+function pubResult(s){ if(!cli||idx==null) return; try{
+  cli.publish('moyang/'+ROOM+'/result', JSON.stringify({s:idx,st:String(s),c:state.done[s]||0,t:state.total[s]||0,ok:!!state.clear[s]}),{qos:0});
+  pubState();
+}catch(e){} }
+
+var _cleared=stageCleared;
+stageCleared=function(s){ _cleared(s); saveSt(); pubResult(s); };
+var _up=updateProgress;
+updateProgress=function(stage){ _up(stage);
+  if(idx==null) return;
+  var now=Date.now(); if(now-lastPub>700){ lastPub=now; saveSt(); pubState(); } };
+var _rt=renderTabs;
+renderTabs=function(){ _rt();
+  KEYS.forEach(function(s){
+    if(state.clear[s]||!(state.done[s]>0)) return;
+    var b=$('#tabs [data-stage="'+s+'"]'); if(!b) return;
+    var sp=document.createElement('span'); sp.className='who-badge'; sp.textContent='다시'; b.appendChild(sp);
+  }); };
+var _ra=resetAll;
+resetAll=function(){ _ra(); if(idx!=null){ try{ localStorage.removeItem(lsKey(idx)); }catch(e){} } pubState(); };
+
+function paintNames(){
+  Array.prototype.forEach.call(document.querySelectorAll('#whoOverlay [data-n]'),function(sp){
+    sp.textContent=names[+sp.dataset.n]||('학생 '+(+sp.dataset.n+1)); });
+}
+function selectStudent(i){
+  idx=i;
+  var saved=loadSt(i), retry=[];
+  if(saved){
+    (saved.cleared||[]).forEach(function(s){ state.clear[s]=true; state.done[s]=state.total[s]||state.done[s]; });
+    (saved.started||[]).forEach(function(s){ if(!state.clear[s]){ retry.push(s); state.done[s]=0;
+      if(s===4){ state.pz.round=0; state.pz.placed=[]; } } });
+  }
+  $('#whoOverlay').classList.add('off');
+  $('#whoChip').classList.remove('off');
+  $('#whoChipTxt').textContent=(i+1)+'번 '+(names[i]||('학생 '+(i+1)));
+  renderTabs();
+  var jump=retry.length? retry.sort()[0] : 1;
+  goStage(jump);
+  var msg = retry.length
+    ? '다시 할 단계: '+retry.map(function(s){ return s+'단계'; }).join(', ')
+    : '1단계부터 시작해요!';
+  toast((i+1)+'번 '+(names[i]||'학생')+' 안녕요! '+msg,'good');
+  pubState();
+}
+function buildOverlay(){
+  var ov=$('#whoOverlay');
+  ov.innerHTML='<div class="who-card"><h2>누구세요?</h2><p>내 번호를 눌러 게임을 시작해요</p>'+
+    '<div class="who-nums">'+[0,1,2,3,4,5].map(function(i){
+      return '<button type="button" class="who-num" data-i="'+i+'"><b>'+(i+1)+'</b><span data-n="'+i+'">'+names[i]+'</span></button>';
+    }).join('')+'</div>'+
+    '<div class="who-status">게임 기록은 내 번호에 저장돼요 · 끝내지 못한 단계는 「다시」로 표시돼요</div></div>';
+  Array.prototype.forEach.call(ov.querySelectorAll('.who-num'),function(b){
+    b.addEventListener('click',function(){ selectStudent(+b.getAttribute('data-i')); });
+  });
+  var chip=document.createElement('div'); chip.id='whoChip'; chip.className='off';
+  chip.innerHTML='<span id="whoChipTxt"></span><button type="button" id="whoAgain">번호 다시 누르기</button>';
+  document.body.appendChild(chip);
+  $('#whoAgain').addEventListener('click',function(){
+    idx=null; $('#whoChip').classList.add('off'); ov.classList.remove('off');
+  });
+}
+buildOverlay(); paintNames();
+if(PRE>=1&&PRE<=6){ selectStudent(PRE-1); }
+
+function connectMqtt(){
+  if(window.mqtt){
+    try{
+      cli=window.mqtt.connect('wss://broker.hivemq.com:8884/mqtt',
+        {clientId:'moa-game-'+Math.random().toString(16).slice(2,10),reconnectPeriod:4000,connectTimeout:9000,clean:true});
+      cli.on('connect',function(){ try{ cli.subscribe('moyang/'+ROOM+'/names',{qos:0}); }catch(e){} });
+      cli.on('message',function(t,p){
+        if(t.indexOf('/names')<0) return;
+        try{ var d=JSON.parse(p.toString());
+          if(Object.prototype.toString.call(d)==='[object Array]'&&d.length===6){ names=d; paintNames(); }
+        }catch(e){}
+      });
+    }catch(e){}
+    return;
+  }
+  if(++tries>20) return;
+  setTimeout(connectMqtt,800);
+}
+var sc=document.createElement('script');
+sc.src='https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+document.head.appendChild(sc);
+connectMqtt();
+})();
+</script>
+
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4bc70e2c01a94c73b74392e4234840661791215815920" integrity="sha512-L0ha0OXavK/8okipN9F8BtP84dg9DUhPERbBXzwI6dgTA55d2+yweo3pn5CSFYs45/r8md2+xvUPtTdvTNRfjA==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>

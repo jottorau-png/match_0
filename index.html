@@ -624,6 +624,27 @@ function attemptDrop(el, payload, target){
   if(c && c.drop) c.drop(el, payload, target);
 }
 
+/* ---------------- touch to speak ---------------- */
+function speak(txt){
+  if(muted) return;
+  try{
+    if(!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(txt);
+    u.lang = 'ko-KR';
+    u.rate = 0.85;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+try{ if(window.speechSynthesis) speechSynthesis.getVoices(); }catch(e){}
+document.addEventListener('click', function(ev){
+  if(suppressClick) return;
+  const m = ev.target.closest('.mini[data-obj]');
+  if(m){ speak(OBJ_NAME[m.getAttribute('data-obj')]); return; }
+  const s = ev.target.closest('[data-say]');
+  if(s) speak(s.getAttribute('data-say'));
+});
+
 /* ---------------- feedback helpers ---------------- */
 function flash(el, cls, ms){
   el.classList.remove(cls);
@@ -652,7 +673,12 @@ function stageCleared(stage){
   updateProgress(stage);
   sfxWin(); confetti(46);
   const next = STAGE_KEYS[STAGE_KEYS.indexOf(stage) + 1];
-  celebrate('🎉', CLEAR_TITLE[stage], CLEAR_MSG[stage], next
+  const tot = stage === 4 ? STAGE_DATA[4].rounds.length : state.total[stage];
+  const ok = Math.max(0, tot - (state.miss[stage] || 0));
+  const score = stage === 4
+    ? ' 🎯 퀴즈 ' + tot + '문제 중 ' + ok + '문제 정답!'
+    : ' 🎯 전체 ' + tot + '개 중 ' + ok + '개 정답!';
+  celebrate('🎉', CLEAR_TITLE[stage], CLEAR_MSG[stage] + score, next
     ? [{label:next + '단계 ' + STAGE_DATA[next].name + ' →', cls:'warm', act:function(){ goStage(next); }},
        {label:'여기서 멈추기', cls:'ghost'}]
     : [{label:'닫기', cls:'warm'}]);
@@ -664,10 +690,10 @@ function stageCleared(stage){
    ============================================================ */
 function rowKeyHTML(r){
   if(r.kind === 'shape'){
-    return '<div class="sv">' + shapeSVG(r.key) + '</div>' +
+    return '<div class="sv" data-say="' + SHAPE_LABEL[r.key] + '">' + shapeSVG(r.key) + '</div>' +
            '<div class="lb">' + SHAPE_LABEL[r.key] + '</div>';
   }
-  return '<div class="sv objkey">' + objImg(r.key) + '</div>' +
+  return '<div class="sv objkey" data-say="' + OBJ_NAME[r.key] + '">' + objImg(r.key) + '</div>' +
          '<div class="lb">' + OBJ_NAME[r.key] + '</div>';
 }
 function miniHTML(k, cls){
@@ -730,7 +756,7 @@ function renderStage3(){
   const D = STAGE_DATA[3];
   const bins = D.cats.map(function(c){
     return '<div class="bin ' + c.id + '" data-cat="' + c.id + '">' +
-      '<div class="bin-h"><span>' + c.label + '</span>' +
+      '<div class="bin-h" data-say="' + c.label + '"><span>' + c.label + '</span>' +
         '<span class="cnt" data-bcnt="' + c.id + '">1 / ' + c.items.length + '</span></div>' +
       '<div class="bin-body drop" data-cat="' + c.id + '">' + miniHTML(c.sample, 'placed sample') + '</div>' +
     '</div>';
@@ -865,48 +891,64 @@ function nextPuzzle(){
    ============================================================ */
 const controllers = {};
 
+function refreshRowSlot(stage, slot){
+  if(!slot) return;
+  const i = parseInt(slot.dataset.row, 10);
+  const D = STAGE_DATA[stage];
+  const n = slot.querySelectorAll('.mini').length;
+  const cnt = slot.querySelector('.slotcount');
+  if(cnt) cnt.textContent = n + ' / ' + D.rows[i].items.length;
+  const crow = slot.closest('.crow');
+  if(crow) crow.classList.toggle('done', n >= D.rows[i].items.length);
+}
+function refreshBin(body){
+  if(!body) return;
+  const bin = body.closest('.bin');
+  if(!bin) return;
+  const cat = STAGE_DATA[3].cats.filter(function(c){ return c.id === body.dataset.cat; })[0];
+  if(!cat) return;
+  const n = body.querySelectorAll('.mini').length;
+  bin.querySelector('[data-bcnt]').textContent = n + ' / ' + cat.items.length;
+  bin.classList.toggle('full', n >= cat.items.length);
+}
 function rowsDrop(stage){
   return function(el, payload, target){
     if(payload.type !== 'obj') return;
+    if(state.clear[stage]) return;
     const slot = target.closest('.crow-slots');
     if(!slot) return;
     const want = parseInt(slot.dataset.row, 10);
     const D = STAGE_DATA[stage];
     if(D.rows[want].sample) return;
-    if(payload.row === want){
-      const cnt = slot.querySelector('.slotcount');
-      slot.insertBefore(el, cnt);
-      el.classList.add('pop');
-      el.style.pointerEvents = 'none';
-      el.removeAttribute('tabindex');
-      el.setAttribute('role','img');
-      el.classList.remove('sel');
-      sel = null;
-      const n = slot.querySelectorAll('.mini').length;
-      cnt.textContent = n + ' / ' + D.rows[want].items.length;
-      if(n >= D.rows[want].items.length) slot.closest('.crow').classList.add('done');
-      sfxOk();
-      state.done[stage]++;
-      updateProgress(stage);
-      if(state.done[stage] >= state.total[stage]) stageCleared(stage);
-    }else{
-      const cnt = slot.querySelector('.slotcount');
-      slot.insertBefore(el, cnt);
-      el.classList.add('pop','missmark');
-      el.style.pointerEvents = 'none';
-      el.removeAttribute('tabindex');
-      el.setAttribute('role','img');
-      el.classList.remove('sel');
-      sel = null;
-      const n = slot.querySelectorAll('.mini').length;
-      cnt.textContent = n + ' / ' + D.rows[want].items.length;
-      sfxNo();
-      state.miss[stage] = (state.miss[stage]||0)+1;
-      state.done[stage]++;
-      updateProgress(stage);
-      toast('다시 살펴볼 물체예요 — 기록했어요', 'bad');
-      if(state.done[stage] >= state.total[stage]) stageCleared(stage);
+    if(slot.querySelectorAll('.mini').length >= D.rows[want].items.length){
+      toast('그 칸은 이미 가득 찼어요', 'bad');
+      return;
     }
+    const first = !el.__placed;
+    const from = first ? null : el.closest('.crow-slots');
+    if(!first && from === slot) return;
+    slot.insertBefore(el, slot.querySelector('.slotcount'));
+    el.__placed = true;
+    el.classList.add('pop');
+    el.classList.remove('sel');
+    sel = null;
+    const correct = payload.row === want;
+    if(correct){
+      if(el.__wrong){ el.__wrong = false; el.classList.remove('missmark'); state.miss[stage] = Math.max(0, (state.miss[stage]||0) - 1); }
+      sfxOk();
+    }else{
+      const wasNew = !el.__wrong;
+      el.__wrong = true;
+      el.classList.add('missmark');
+      state.miss[stage] = (state.miss[stage]||0) + (wasNew ? 1 : 0);
+      sfxNo();
+      if(wasNew) toast('다시 살펴볼 물체예요 — 기록했어요', 'bad');
+    }
+    if(first) state.done[stage]++;
+    refreshRowSlot(stage, from);
+    refreshRowSlot(stage, slot);
+    updateProgress(stage);
+    if(state.done[stage] >= state.total[stage]) stageCleared(stage);
   };
 }
 controllers[1] = { drop: rowsDrop(1) };
@@ -915,40 +957,42 @@ controllers[2] = { drop: rowsDrop(2) };
 controllers[3] = {
   drop: function(el, payload, target){
     if(payload.type !== 'obj') return;
+    if(state.clear[3]) return;
     const bin = target.closest('.bin');
     if(!bin) return;
+    const body = bin.querySelector('.bin-body');
     const want = bin.dataset.cat;
-    if(payload.cat === want){
-      el.classList.add('pop');
-      el.style.pointerEvents = 'none';
-      el.removeAttribute('tabindex');
-      el.setAttribute('role','img');
-      el.classList.remove('sel');
-      sel = null;
-      target.appendChild(el);
-      const cat = STAGE_DATA[3].cats.filter(function(c){ return c.id === want; })[0];
-      const n = target.querySelectorAll('.mini').length;
-      bin.querySelector('[data-bcnt]').textContent = n + ' / ' + cat.items.length;
-      if(n >= cat.items.length) bin.classList.add('full');
-      sfxOk();
-      state.done[3]++;
-      updateProgress(3);
-      if(state.done[3] >= state.total[3]) stageCleared(3);
-    }else{
-      el.classList.add('pop','missmark');
-      el.style.pointerEvents = 'none';
-      el.removeAttribute('tabindex');
-      el.setAttribute('role','img');
-      el.classList.remove('sel');
-      sel = null;
-      target.appendChild(el);
-      sfxNo();
-      state.miss[3] = (state.miss[3]||0)+1;
-      state.done[3]++;
-      updateProgress(3);
-      toast('다시 살펴볼 물체예요 — 기록했어요', 'bad');
-      if(state.done[3] >= state.total[3]) stageCleared(3);
+    const cat = STAGE_DATA[3].cats.filter(function(c){ return c.id === want; })[0];
+    if(!cat) return;
+    if(body.querySelectorAll('.mini').length >= cat.items.length){
+      toast('그 바구니는 이미 가득 찼어요', 'bad');
+      return;
     }
+    const first = !el.__placed;
+    const from = first ? null : el.closest('.bin-body');
+    if(!first && from === body) return;
+    body.appendChild(el);
+    el.__placed = true;
+    el.classList.add('pop');
+    el.classList.remove('sel');
+    sel = null;
+    const correct = payload.cat === want;
+    if(correct){
+      if(el.__wrong){ el.__wrong = false; el.classList.remove('missmark'); state.miss[3] = Math.max(0, (state.miss[3]||0) - 1); }
+      sfxOk();
+    }else{
+      const wasNew = !el.__wrong;
+      el.__wrong = true;
+      el.classList.add('missmark');
+      state.miss[3] = (state.miss[3]||0) + (wasNew ? 1 : 0);
+      sfxNo();
+      if(wasNew) toast('다시 살펴볼 물체예요 — 기록했어요', 'bad');
+    }
+    if(first) state.done[3]++;
+    refreshBin(from);
+    refreshBin(body);
+    updateProgress(3);
+    if(state.done[3] >= state.total[3]) stageCleared(3);
   }
 };
 
@@ -1151,6 +1195,7 @@ function $(s){ return document.querySelector(s); }
 var QS=new URLSearchParams(location.search);
 var ROOM=(QS.get('r')||'moyang31').replace(/[^0-9A-Za-z가-힣]/g,'')||'moyang31';
 var PRE=parseInt(QS.get('s')||'',10);
+var ST=parseInt(QS.get('st')||'',10); if(!(ST>=1&&ST<=4)) ST=0;
 var idx=null, cli=null, lastPub=0, tries=0;
 var names=['학생 1','학생 2','학생 3','학생 4','학생 5','학생 6'];
 var KEYS=[1,2,3,4];
@@ -1235,7 +1280,8 @@ function selectStudent(i){
   $('#whoChipTxt').textContent=(i+1)+'번 '+(names[i]||('학생 '+(i+1)));
   renderTabs();
   var jump=retry.length? retry.sort()[0] : 1;
-  goStage(jump);
+  if(ST) jump=ST;
+  _gs(jump);
   var msg = retry.length
     ? '다시 할 단계: '+retry.map(function(s){ return s+'단계'; }).join(', ')
     : '1단계부터 시작해요!';
